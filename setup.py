@@ -1,0 +1,32 @@
+import setuptools
+
+# with open('README.rst', 'r') as f:
+#   long_description = f.read()
+
+setuptools.setup(
+  name = 'schwab_tools',
+  version = '0.0.1',
+  author = 'Mason Krause',
+  description = 'A python library built for automated trading with Schwab',
+  # long_description = long_description,
+  long_description_content_type='text/x-rst',
+  url='https://github.com/mason-krause/schwab-tools',
+  packages = setuptools.find_packages(),
+  include_package_data = True,
+  python_requires = '>=3.7',
+  install_requires = [
+    'schwab-py',
+    'playwright==1.44.0',
+    'pyotp',
+    'google-cloud-logging', 
+    'google-cloud-storage', 
+    'google-cloud-secret-manager',
+    'polars', 
+    'pandas', 
+    'pyarrow'],
+    extras_require={
+      'dev': [
+        'pytest',
+        'pytest-timeout',
+        'sphinx',
+        'sphinx_rtd_theme']},)
