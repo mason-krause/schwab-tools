@@ -1,4 +1,5 @@
 import time
+import datetime
 import json
 import asyncio
 from contextlib import suppress
@@ -7,6 +8,7 @@ from schwab.streaming import UnexpectedResponseCode
 from schwab.client.base import BaseClient
 from schwab_tools.api import APIClient
 from schwab_tools.utils import log_in_background, start_thread 
+import pprint
 
 class Account:
   '''
@@ -18,7 +20,6 @@ class Account:
     self.account_key = account_key if account_key else self.list_accounts()[0]['hashValue']
     self.monitoring_active = False
     self.subscribed_orders = {}
-    # self.positions = {}
     if background_monitor == True:
       self.monitor_in_background()
 
@@ -54,11 +55,11 @@ class Account:
 
   def check_balance(self):
     '''
-    Returns the balance of your account
+    Returns the cash balance of your account
     '''
     response, status_code = self.client.get_account(parsed_response=True, account_hash=self.account_key)
     try:
-      balance = response['aggregatedBalance']['liquidationValue']
+      balance = response['securitiesAccount']['currentBalances']['cashBalance']
       return balance
     except Exception as e:
       log_in_background(
@@ -69,39 +70,88 @@ class Account:
         account_key = self.account_key)
       return self.check_balance()
     
+  def check_long_market_value(self):
+    '''
+    Returns the aggregate value of all securities for long positions in the account
+    '''
+    response, status_code = self.client.get_account(parsed_response=True, account_hash=self.account_key)
+    try:
+      balance = response['securitiesAccount']['currentBalances']['longMarketValue']
+      return balance
+    except Exception as e:
+      log_in_background(
+        called_from = 'check_long_market_value',
+        tags = ['user-message'], 
+        message = time.strftime('%H:%M:%S', time.localtime()) + ': Error getting long market value, retrying',
+        e = e,
+        account_key = self.account_key)
+      return self.check_long_market_value()
+    
   def view_portfolio(self):
     '''
     Provides details for your account portfolio
     '''
     response, status_code = self.client.get_account(parsed_response=True, account_hash=self.account_key, fields=BaseClient.Account.Fields.POSITIONS)
     try:
-      portfolio_data = response
-      # self.positions = portfolio_data['securitiesAccount']['positions']
-      return portfolio_data
+      positions = response['securitiesAccount']['positions']
+      return positions
     except Exception as e:
       log_in_background(
-        called_from = 'view_portfolio',
+        called_from = 'Account.view_portfolio',
         tags = ['user-message'], 
-        message = time.strftime('%H:%M:%S', time.localtime()) + ': Error getting account balance, retrying',
+        message = time.strftime('%H:%M:%S', time.localtime()) + ': Error getting portfolio info, retrying',
         e = e,
         account_key = self.account_key)
-      return self.check_balance()    
+      return self.view_portfolio()    
     
-  def get_order_history(self, start_datetime=None, end_datetime=None, marker=''):
+  def get_order_history(self, start_datetime=None, end_datetime=None):
     '''
     Provides details for all orders placed in account over specified time range
     '''
-    response, status_code = self.client.get_orders_for_account(account_hash=self.account_key, from_entered_datetime=start_datetime, to_entered_datetime=end_datetime)
-    try:
-      order_history = response['OrdersResponse']
-      return order_history
-    except Exception as e:
+    all_orders = []
+    end_datetime = end_datetime or datetime.datetime.now(datetime.timezone.utc)
+    while True:
+      response, status_code = self.client.get_orders_for_account(parsed_response=True, account_hash=self.account_key, from_entered_datetime=start_datetime, to_entered_datetime=end_datetime)
+      if status_code != 200:
+        log_in_background(
+          called_from = 'Account.get_order_history',
+          tags = ['user-message'], 
+          message = time.strftime('%H:%M:%S', time.localtime()) + ': Error getting account order history',
+          account_key = self.account_key)
+        break
+      if not response:
+        break
+      all_orders.extend(response)
+      earliest_result_dt = datetime.datetime.strptime(response[-1]['enteredTime'], '%Y-%m-%dT%H:%M:%S%z')
+      if earliest_result_dt >= end_datetime:
+        break
+      end_datetime = earliest_result_dt
+    return all_orders
+
+  def get_transaction_history(self, start_datetime=None, end_datetime=None):
+    '''
+    Provides details for all transactions over specified time range
+    '''
+    response, status_code = self.client.get_transactions(parsed_response=True, account_hash=self.account_key, start_date=start_datetime, end_date=end_datetime)
+    if status_code == 200:
+      return response
+    else:
       log_in_background(
-        called_from = 'get_order_history',
+        called_from = 'Account.get_transaction_history',
         tags = ['user-message'], 
-        message = time.strftime('%H:%M:%S', time.localtime()) + ': Error getting account order history',
-        e = e,
+        message = time.strftime('%H:%M:%S', time.localtime()) + ': Error getting account transaction history',
         account_key = self.account_key)
+
+  def lookup_exited_positions(self, trailing_days=31): # maybe want to restrict to exitied with a loss # maybe we should even track the agragate loss for each ticker
+    now = datetime.datetime.now(datetime.timezone.utc)
+    start_date = now - datetime.timedelta(days=trailing_days)
+    exited_symbols = set()
+    history = self.get_order_history(start_datetime=start_date, end_datetime=now) 
+    for order in history:
+      for leg in order.get('orderLegCollection', []):
+        if leg.get('positionEffect') == 'CLOSING':
+          exited_symbols.add(leg['instrument']['symbol'])
+    return list(exited_symbols) 
 
   async def _stream_account_updates(self):
     try:
