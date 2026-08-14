@@ -5,7 +5,7 @@ import setuptools
 
 setuptools.setup(
   name = 'schwab-tools',
-  version = '0.0.1',
+  version = '0.0.2',
   author = 'Mason Krause',
   description = 'A python library built for automated trading with Schwab',
   # long_description = long_description,
